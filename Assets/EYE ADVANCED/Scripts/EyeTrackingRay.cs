@@ -1,6 +1,5 @@
 ﻿using System.Collections;
 using System.Collections.Generic;
-using Unity.VisualScripting;
 using UnityEngine;
 
 [RequireComponent(typeof(LineRenderer))]
@@ -25,21 +24,14 @@ public class EyeTrackingRay : MonoBehaviour
 
     private LineRenderer lineRenderer;
 
-    //  Store gaze order (objects the user has looked at)
-    private List<string> gazeOrder = new List<string>();
-
+    // Store interactables
     private List<EyeInteractable> eyeInteractables = new List<EyeInteractable>();
-
-    // Define the correct sequence of objects to look at
-    private readonly List<string> correctOrder = new List<string> { "EyeInteractable", "EyeInteractable1", "EyeInteractable2" };
-
+    private List<PatternBallGazeHandler> patternBalls = new List<PatternBallGazeHandler>();
 
     void Awake()
     {
         Instance = this; // Assign instance to singleton
     }
-
-
 
     void Start()
     {
@@ -66,27 +58,30 @@ public class EyeTrackingRay : MonoBehaviour
 
         if (Physics.Raycast(transform.position, rayCastDirection, out hit, rayDinstance, layersToInclude))
         {
-            //UnSelect();  // Reset previous interactables
-
+            // Detect normal eye-interactable objects
             var eyeInteractable = hit.transform.GetComponent<EyeInteractable>();
             if (eyeInteractable != null && !eyeInteractables.Contains(eyeInteractable))
             {
                 eyeInteractables.Add(eyeInteractable);
-                //eyeInteractable.IsHovered = true;
                 eyeInteractable.OnStartLooking();
-
-                //  Store the order of objects looked at
-                StoreGazeOrder(hit.transform.name);
-
-                lineRenderer.startColor = rayColorHoverState;
-                lineRenderer.endColor = rayColorHoverState;
             }
+
+            // Detect pattern balls separately
+            var patternBall = hit.transform.GetComponent<PatternBallGazeHandler>();
+            if (patternBall != null && !patternBalls.Contains(patternBall))
+            {
+                patternBalls.Add(patternBall);
+                patternBall.OnStartLooking(); // Trigger pattern interaction
+            }
+
+            lineRenderer.startColor = rayColorHoverState;
+            lineRenderer.endColor = rayColorHoverState;
         }
         else
         {
             lineRenderer.startColor = rayColorDefaultState;
             lineRenderer.endColor = rayColorDefaultState;
-            UnSelect(true);  // Clear the list
+            UnSelect(true);
         }
     }
 
@@ -100,32 +95,18 @@ public class EyeTrackingRay : MonoBehaviour
             }
         }
 
+        foreach (var patternBall in patternBalls)
+        {
+            if (patternBall != null)
+            {
+                patternBall.OnStopLooking();
+            }
+        }
+
         if (clear)
         {
             eyeInteractables.Clear();
+            patternBalls.Clear();
         }
-    }
-    // 🔹 Store the order of objects the user looks at
-    public void StoreGazeOrder(string objectName)
-    {
-        Debug.Log($"👀 Looked at: {objectName} | Current Gaze Order: {string.Join(" -> ", gazeOrder)}");
-
-        // Ignore if object is not in the correct sequence list
-        if (!correctOrder.Contains(objectName))
-        {
-            Debug.LogWarning($"⚠ {objectName} is not in the correct sequence list.");
-            return;
-        }
-
-        // Ignore if object is already looked at
-        if (gazeOrder.Contains(objectName))
-        {
-            Debug.Log($"🔄 {objectName} was already looked at. Ignoring.");
-            return;
-        }
-
-        // Add object to gaze order
-        gazeOrder.Add(objectName);
-        Debug.Log($"✅ Added: {objectName} | New Gaze Order: {string.Join(" -> ", gazeOrder)}");
     }
 }
