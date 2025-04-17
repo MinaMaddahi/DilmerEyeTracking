@@ -1,192 +1,217 @@
 ﻿using UnityEngine;
-using UnityEngine.Events;
-using UnityEngine.SceneManagement;
 using System.Collections;
-using System.Collections.Generic;
-using System.Linq;
-using UnityEngine.UI; // For UI-based progress bar
+using Modularify.LoadingBars3D;
 
 [RequireComponent(typeof(Collider))]
 [RequireComponent(typeof(Rigidbody))]
 public class EyeInteractable : MonoBehaviour
 {
-    public bool IsHovered { get; set; }
+    public bool IsHovered { get; private set; }
 
-    [SerializeField] private Material triangleColor;
-    [SerializeField] private UnityEvent<GameObject> OnObjectHover;
+    [Header("Mode")]
+    [Tooltip("If true, this object acts as an unlocker and skips progress bar logic.")]
+    [SerializeField] private bool isUnlocker = false;
+
+    [Header("Materials")]
     [SerializeField] private Material OnHoverActiveMaterial;
     [SerializeField] private Material OnHoverInactiveMaterial;
 
+    [Header("Sequence Setup")]
+    [SerializeField] private GameObject nextSegment;
+    [SerializeField] private GameObject segmentUnlock;
+
+    [Header("Progress Settings (for non-unlockers)")]
+    [SerializeField] private LoadingBarSegments progressBar;
+    [SerializeField] private int totalSegments = 5;
+    [SerializeField] private float segmentFillTime = 1f;
+
+    [Header("Unlocker Settings (if isUnlocker is true)")]
+    [SerializeField] private float unlockDelay = 2f;
+
     private MeshRenderer meshRenderer;
-    public GameObject selectionRing; // Ring object to show selection
+    public GameObject selectionRing;
 
-    // 🔹 Progress Bar Elements
-    public GameObject progressBar; // Assign the Progress Bar (Activity Indicator) in Unity Inspector
-    public Image progressFill; // Assign UI Image if using UI-based progress bar
-    private float fillAmount = 0f;
-    private bool isFilling = false;
-    public float fillSpeed = 0.5f; // Adjust fill speed
-
-    // 🔹 Static list to track gaze order
-    private static List<string> gazeOrder = new List<string>();
-
-    // 🔹 Define the correct sequence
-    private static readonly List<string> correctOrder = new List<string>
-    {
-        "EyeInteractable",
-        "EyeInteractable (1)",
-        "EyeInteractable (2)"
-    };
-
-    void OnEnable()
-    {
-        SceneManager.sceneLoaded += OnSceneLoaded;
-    }
-
-    void OnDisable()
-    {
-        SceneManager.sceneLoaded -= OnSceneLoaded;
-    }
-
-    void OnSceneLoaded(Scene scene, LoadSceneMode mode)
-    {
-        Debug.Log($"Scene Loaded: {scene.name}");
-        Initialize();
-    }
+    private int currentFilledSegments = 0;
+    private Coroutine progressCoroutine;
+    private Coroutine resetCoroutine;
+    private Coroutine unlockCoroutine;
+    private bool isCompleted = false;
 
     void Start()
     {
-        if (SceneManager.GetActiveScene().isLoaded)
-        {
-            Initialize();
-        }
-
-        // Hide progress bar at start
-        if (progressBar != null)
-        {
-            progressBar.SetActive(false);
-        }
-    }
-
-    void Initialize()
-    {
         meshRenderer = GetComponent<MeshRenderer>();
 
-        if (meshRenderer == null)
-        {
-            Debug.LogError("MeshRenderer component is missing!");
-        }
+        if (segmentUnlock != null)
+            segmentUnlock.SetActive(false);
 
-        if (OnHoverActiveMaterial == null || OnHoverInactiveMaterial == null)
-        {
-            Debug.LogWarning("Hover materials are not assigned! Please assign them in the Inspector.");
-        }
+        if (selectionRing != null)
+            selectionRing.SetActive(false);
+
+        if (progressBar != null)
+            progressBar.SetPercentage(0);
+
+        if (nextSegment != null)
+            nextSegment.SetActive(false);
     }
 
-    // 🔹 Called when the user starts looking at this object
     public void OnStartLooking()
     {
-        Debug.Log($"🔹 OnStartLooking() triggered for {gameObject.name}");
+        if (isCompleted) return;
 
-        if (!gazeOrder.Contains(gameObject.name))
-        {
-            gazeOrder.Add(gameObject.name);
-            Debug.Log($"✅ Gaze Order Updated: {string.Join(" -> ", gazeOrder)}");
-        }
+        Debug.Log("Started looking at: " + gameObject.name);
+        IsHovered = true;
 
-        // Change material when looking at the object
         if (meshRenderer != null && OnHoverActiveMaterial != null)
-        {
             meshRenderer.material = OnHoverActiveMaterial;
-        }
 
-        // Show selection ring
         if (selectionRing != null)
-        {
             selectionRing.SetActive(true);
+
+        if (segmentUnlock != null)
+            segmentUnlock.SetActive(true);
+
+        if (resetCoroutine != null)
+        {
+            StopCoroutine(resetCoroutine);
+            resetCoroutine = null;
         }
 
-        OnObjectHover?.Invoke(gameObject);
-
-        // 🔹 Check if gaze order is correct and update color
-        CheckSequenceAndChangeColor();
-
-        // 🔹 Start the progress bar
-        if (progressBar != null)
+        if (isUnlocker)
         {
-            progressBar.SetActive(true);
-            StartCoroutine(FillProgressBar());
+            if (unlockCoroutine == null)
+                unlockCoroutine = StartCoroutine(UnlockAfterDelay());
+        }
+        else
+        {
+            if (progressBar != null && progressCoroutine == null)
+                progressCoroutine = StartCoroutine(FillProgress());
         }
     }
 
-    // 🔹 Called when the user stops looking at this object
     public void OnStopLooking()
     {
-        Debug.Log(gameObject.name + " is being unhovered.");
+        if (isCompleted) return;
 
-        // Restore default material
+        Debug.Log("Stopped looking at: " + gameObject.name);
+        IsHovered = false;
+
         if (meshRenderer != null && OnHoverInactiveMaterial != null)
-        {
             meshRenderer.material = OnHoverInactiveMaterial;
-        }
 
-        // Hide selection ring
         if (selectionRing != null)
-        {
             selectionRing.SetActive(false);
-        }
 
-        // 🔹 Reset progress bar
-        if (progressBar != null)
+        if (segmentUnlock != null && !isCompleted)
+            segmentUnlock.SetActive(false);
+
+        if (isUnlocker)
         {
-            StopAllCoroutines();
-            fillAmount = 0f;
-            if (progressFill != null)
+            if (unlockCoroutine != null)
             {
-                progressFill.fillAmount = 0f; // Reset UI progress bar fill amount
+                StopCoroutine(unlockCoroutine);
+                unlockCoroutine = null;
             }
-            progressBar.SetActive(false);
         }
-    }
-
-    // 🔹 Check if the user looked at objects in the correct order, then change color
-    private void CheckSequenceAndChangeColor()
-    {
-        if (gazeOrder.Count == correctOrder.Count && !gazeOrder.Except(correctOrder).Any())
+        else
         {
-            Debug.Log("✅ Correct order detected! Changing all sphere colors.");
-
-            // Find all spheres and change their color
-            EyeInteractable[] allSpheres = FindObjectsOfType<EyeInteractable>();
-            foreach (var sphere in allSpheres)
+            if (progressCoroutine != null)
             {
-                if (sphere.meshRenderer != null && sphere.triangleColor != null)
-                {
-                    sphere.meshRenderer.material = sphere.triangleColor;
-                }
+                StopCoroutine(progressCoroutine);
+                progressCoroutine = null;
+            }
+
+            if (currentFilledSegments > 0)
+            {
+                resetCoroutine = StartCoroutine(ResetAfterDelay());
             }
         }
     }
 
-    // 🔹 Fill progress bar gradually
-    IEnumerator FillProgressBar()
+    private IEnumerator FillProgress()
     {
-        isFilling = true;
-        while (fillAmount < 1f)
+        while (currentFilledSegments < totalSegments)
         {
-            fillAmount += Time.deltaTime * fillSpeed;
-            if (progressFill != null)
+            if (!IsHovered)
             {
-                progressFill.fillAmount = fillAmount;
+                progressCoroutine = null;
+                yield break;
             }
-            yield return null;
+
+            currentFilledSegments++;
+            float percentage = (float)currentFilledSegments / totalSegments;
+            progressBar.SetPercentage(percentage);
+
+            Debug.Log($"{gameObject.name} progress: {currentFilledSegments}/{totalSegments}");
+
+            if (currentFilledSegments >= totalSegments)
+            {
+                CompleteSegment();
+                progressCoroutine = null;
+                yield break;
+            }
+
+            yield return new WaitForSeconds(segmentFillTime);
+        }
+
+        progressCoroutine = null;
+    }
+
+    private IEnumerator UnlockAfterDelay()
+    {
+        yield return new WaitForSeconds(unlockDelay);
+
+        Debug.Log("Unlocker activated: " + gameObject.name);
+        isCompleted = true;
+
+        if (nextSegment != null)
+        {
+            Debug.Log("Activating next segment: " + nextSegment.name);
+            nextSegment.SetActive(true);
         }
     }
 
-    // 🔹 Reset gaze order if needed
-    public static void ResetGazeOrder()
+    private void CompleteSegment()
     {
-        gazeOrder.Clear();
-        Debug.Log("🔄 Gaze order has been reset.");
+        Debug.Log(gameObject.name + " COMPLETED!");
+        isCompleted = true;
+
+        progressBar.SetPercentage(1.0f);
+
+        if (segmentUnlock != null)
+            segmentUnlock.SetActive(true);
+
+        if (selectionRing != null)
+            selectionRing.SetActive(false);
+
+        StartCoroutine(ActivateNextSegmentAfterDelay());
+    }
+
+    private IEnumerator ActivateNextSegmentAfterDelay()
+    {
+        yield return new WaitForSeconds(1.0f);
+
+        if (nextSegment != null)
+        {
+            Debug.Log("Activating next segment: " + nextSegment.name);
+            nextSegment.SetActive(true);
+        }
+        else
+        {
+            Debug.Log("No next segment assigned to " + gameObject.name);
+        }
+    }
+
+    private IEnumerator ResetAfterDelay()
+    {
+        yield return new WaitForSeconds(2.0f);
+
+        if (!IsHovered && !isCompleted)
+        {
+            Debug.Log("Resetting progress for " + gameObject.name);
+            currentFilledSegments = 0;
+            progressBar.SetPercentage(0);
+        }
+
+        resetCoroutine = null;
     }
 }
